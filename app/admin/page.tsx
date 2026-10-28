@@ -1,9 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatPackLabel } from "@/app/questions";
 
 type Packs = Record<string, string[]>;
+
+type DraftRow = { id: string; text: string };
+
+function newRow(text = ""): DraftRow {
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return { id, text };
+}
 
 async function fetchJson(url: string, init?: RequestInit, timeoutMs = 12000) {
   const ctrl = new AbortController();
@@ -29,12 +39,14 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [packs, setPacks] = useState<Packs>({});
   const [selected, setSelected] = useState("");
-  const [draftWords, setDraftWords] = useState("");
+  const [draftRows, setDraftRows] = useState<DraftRow[]>([]);
   const [newCategory, setNewCategory] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [packsLoading, setPacksLoading] = useState(false);
+  const focusNewRef = useRef(false);
+  const lastInputRef = useRef<HTMLInputElement | null>(null);
 
   const categories = useMemo(() => Object.keys(packs).sort(), [packs]);
 
@@ -94,11 +106,17 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!selected) {
-      setDraftWords("");
+      setDraftRows([]);
       return;
     }
-    setDraftWords((packs[selected] || []).join("\n"));
+    setDraftRows((packs[selected] || []).map((text) => newRow(text)));
   }, [selected, packs]);
+
+  useEffect(() => {
+    if (!focusNewRef.current) return;
+    focusNewRef.current = false;
+    lastInputRef.current?.focus();
+  }, [draftRows.length]);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -132,16 +150,26 @@ export default function AdminPage() {
     setSelected("");
   };
 
+  const updateRow = (id: string, value: string) => {
+    setDraftRows((prev) => prev.map((row) => (row.id === id ? { ...row, text: value } : row)));
+  };
+
+  const removeRow = (id: string) => {
+    setDraftRows((prev) => prev.filter((row) => row.id !== id));
+  };
+
+  const addRow = () => {
+    focusNewRef.current = true;
+    setDraftRows((prev) => [...prev, newRow()]);
+  };
+
   const save = async () => {
     if (!selected) return;
     setBusy(true);
     setStatus("");
     setError("");
     try {
-      const words = draftWords
-        .split(/\r?\n/)
-        .map((w) => w.trim())
-        .filter(Boolean);
+      const words = draftRows.map((w) => w.text.trim()).filter(Boolean);
       const { res, data } = await fetchJson("/api/admin/words", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -152,6 +180,7 @@ export default function AdminPage() {
         return;
       }
       setPacks((prev) => ({ ...prev, [selected]: words }));
+      setDraftRows(words.map((text) => newRow(text)));
       setStatus(`Saved ${selected} (${words.length})`);
     } finally {
       setBusy(false);
@@ -271,8 +300,10 @@ export default function AdminPage() {
     );
   }
 
+  const filledCount = draftRows.map((r) => r.text.trim()).filter(Boolean).length;
+
   return (
-    <main className="flex flex-1 flex-col gap-4 animate-riseIn py-2">
+    <main className="flex flex-1 flex-col gap-4 animate-riseIn py-2 pb-24">
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="wz-brand text-3xl">Pack admin</h1>
@@ -287,7 +318,12 @@ export default function AdminPage() {
         <button type="button" className="wz-btn-ghost py-2 px-3 text-sm" onClick={seed} disabled={busy}>
           Seed fallbacks
         </button>
-        <button type="button" className="wz-btn-ghost py-2 px-3 text-sm" onClick={removePack} disabled={busy || !selected}>
+        <button
+          type="button"
+          className="wz-btn-ghost py-2 px-3 text-sm"
+          onClick={removePack}
+          disabled={busy || !selected}
+        >
           Delete pack
         </button>
       </div>
@@ -313,22 +349,66 @@ export default function AdminPage() {
           onChange={(e) => setNewCategory(e.target.value)}
           placeholder="new_pack_id"
         />
-        <button type="button" className="wz-btn py-2 px-3 text-sm shrink-0" onClick={createPack} disabled={busy}>
+        <button
+          type="button"
+          className="wz-btn py-2 px-3 text-sm shrink-0"
+          onClick={createPack}
+          disabled={busy}
+        >
           Add
         </button>
       </div>
 
       {selected && (
-        <div className="wz-panel rounded-2xl p-4 space-y-3 flex-1 flex flex-col">
-          <h2 className="font-display text-xl">{formatPackLabel(selected)}</h2>
-          <textarea
-            className="wz-input min-h-[280px] flex-1 font-mono text-sm"
-            value={draftWords}
-            onChange={(e) => setDraftWords(e.target.value)}
-            placeholder="One question per line"
-          />
-          <button type="button" className="wz-btn w-full" onClick={save} disabled={busy}>
-            Save pack
+        <div className="wz-panel rounded-2xl p-4 space-y-3 flex-1 flex flex-col min-h-0">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="font-display text-xl">{formatPackLabel(selected)}</h2>
+            <span className="text-xs text-[var(--wz-muted)] tabular-nums">
+              {filledCount} question{filledCount === 1 ? "" : "s"}
+            </span>
+          </div>
+
+          <ul className="flex flex-col gap-2">
+            {draftRows.map((row, index) => (
+              <li key={row.id} className="flex items-stretch gap-2">
+                <input
+                  ref={index === draftRows.length - 1 ? lastInputRef : undefined}
+                  className="wz-input py-3 text-[15px] leading-snug"
+                  value={row.text}
+                  onChange={(e) => updateRow(row.id, e.target.value)}
+                  placeholder={`Question ${index + 1}`}
+                  aria-label={`Question ${index + 1}`}
+                />
+                <button
+                  type="button"
+                  className="shrink-0 w-11 rounded-xl border border-[var(--wz-border)] bg-black/25 text-[var(--wz-muted)] text-xl leading-none transition active:scale-95 hover:text-[var(--wz-accent)] hover:border-[var(--wz-accent)]/40"
+                  onClick={() => removeRow(row.id)}
+                  aria-label={`Delete question ${index + 1}`}
+                  title="Delete"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+            {draftRows.length === 0 && (
+              <li className="text-sm text-[var(--wz-muted)] py-2">
+                No questions yet — tap + to add one.
+              </li>
+            )}
+          </ul>
+
+          <button
+            type="button"
+            className="wz-btn-ghost w-full py-3 text-base"
+            onClick={addRow}
+            disabled={busy}
+            aria-label="Add question"
+          >
+            + Add question
+          </button>
+
+          <button type="button" className="wz-btn w-full sticky bottom-0" onClick={save} disabled={busy}>
+            {busy ? "Saving…" : "Save pack"}
           </button>
         </div>
       )}
