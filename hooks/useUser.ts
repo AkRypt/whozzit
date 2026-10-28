@@ -6,14 +6,14 @@ import {
   initializeUser,
   subscribeStore,
 } from "@/utils/firebase/firebaseHelpers";
-import { WZ } from "@/app/constants";
+import { getStoredPlayerName } from "@/utils/identity";
 
 export function useUser() {
   const store = useSyncExternalStore(subscribeStore, getStore, getStore);
   const [booted, setBooted] = useState(false);
 
   useEffect(() => {
-    const localName = localStorage.getItem(WZ.playerName) || "";
+    const localName = getStoredPlayerName();
     if (localName && !getStore().user.playerName) {
       getStore().user.playerName = localName;
     }

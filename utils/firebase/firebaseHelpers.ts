@@ -1,16 +1,13 @@
 import {
-  signInAnonymously,
-  onAuthStateChanged,
-} from "firebase/auth";
-import {
   doc,
   setDoc,
   getDoc,
   updateDoc,
   onSnapshot,
   runTransaction,
+  deleteField,
 } from "firebase/firestore";
-import { auth, db } from "./firebase";
+import { db } from "./firebase";
 import {
   constants,
   GAME_STATE,
@@ -22,6 +19,12 @@ import {
 import type { CurrentRound, Lobby, Player, UserData } from "@/app/types";
 import { pickRandomQuestion } from "@/app/questions";
 import { modeFromPlayMode, trackLobbyJoined } from "@/utils/analytics";
+import {
+  getOrCreatePlayerId,
+  getStoredPlayerName,
+  setStoredPlayerName,
+} from "@/utils/identity";
+import { shouldSuppressRejoin } from "@/utils/lobbyLeave";
 
 export type Store = {
   user: UserData;
@@ -78,102 +81,77 @@ function setLobby(lobby: Lobby | null) {
   emit();
 }
 
+/**
+ * No Firebase Auth. Load local UUID + display name from localStorage only.
+ * Optional Firestore user docs are written only when joining online lobbies.
+ */
 export async function initializeUser() {
-  return new Promise<void>((resolve) => {
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setUser({ userId: user.uid });
-        localStorage.setItem(WZ.userId, user.uid);
-        await fetchUserData(user.uid);
-      } else {
-        await signInAnonymouslyAndCreateUser();
-      }
-      resolve();
-    });
+  const userId = getOrCreatePlayerId();
+  const playerName = getStoredPlayerName();
+  const storedLobby =
+    typeof window !== "undefined" ? localStorage.getItem(WZ.lobbyCode) : null;
+  setUser({
+    userId,
+    playerName,
+    userFetched: true,
+    playerLobbyCode: store.user.playerLobbyCode ?? storedLobby ?? null,
   });
 }
 
-async function signInAnonymouslyAndCreateUser() {
-  try {
-    const cred = await signInAnonymously(auth);
-    const userId = cred.user.uid;
-    setUser({ userId });
-    localStorage.setItem(WZ.userId, userId);
-    await createUserDocument(userId);
-    await fetchUserData(userId);
-  } catch (error) {
-    console.error("Anonymous sign-in failed:", error);
-    // Pass & play still works without Auth.
-    setUser({ userFetched: true });
+async function upsertUserDoc(userId: string, data: Partial<UserData>) {
+  const payload: Record<string, unknown> = {
+    userId,
+    updatedAt: new Date().toISOString(),
+    ...data,
+  };
+  if (data.playerLobbyCode === null) {
+    payload.playerLobbyCode = deleteField();
   }
+  await setDoc(doc(db, WZ_TABLES.USERS, userId), payload, { merge: true });
 }
 
-async function createUserDocument(userId: string) {
-  try {
-    await setDoc(
-      doc(db, WZ_TABLES.USERS, userId),
-      { createdAt: new Date(), userId },
-      { merge: true }
-    );
-  } catch (error) {
-    console.error("createUserDocument", error);
+export async function updateUserData(
+  userId: string,
+  newUserData: Partial<UserData>,
+  opts?: { syncRemote?: boolean }
+) {
+  setUser(newUserData);
+  if (newUserData.playerName) {
+    setStoredPlayerName(newUserData.playerName);
   }
-}
-
-async function fetchUserData(userId: string) {
-  store.loading = true;
-  emit();
-  try {
-    const snap = await getDoc(doc(db, WZ_TABLES.USERS, userId));
-    if (snap.exists()) {
-      const data = snap.data() as UserData;
-      const localName = localStorage.getItem(WZ.playerName) || "";
-      setUser({
-        ...data,
-        userId,
-        playerName: data.playerName || localName || "",
-        userFetched: true,
-      });
+  if ("playerLobbyCode" in newUserData) {
+    if (newUserData.playerLobbyCode) {
+      localStorage.setItem(WZ.lobbyCode, String(newUserData.playerLobbyCode));
     } else {
-      await createUserDocument(userId);
-      setUser({ userId, userFetched: true });
+      localStorage.removeItem(WZ.lobbyCode);
     }
-  } catch (error) {
-    console.error("fetchUserData", error);
-    setUser({ userId, userFetched: true });
   }
-  store.loading = false;
-  emit();
-}
-
-export async function updateUserData(userId: string, newUserData: Partial<UserData>) {
+  if (opts?.syncRemote === false) return;
+  // Optional remote presence — ignore permission errors until open rules are deployed.
   try {
-    await setDoc(doc(db, WZ_TABLES.USERS, userId), newUserData, { merge: true });
-    setUser(newUserData);
-    if (newUserData.playerName) {
-      localStorage.setItem(WZ.playerName, newUserData.playerName);
-    }
-  } catch (error) {
-    console.error("updateUserData", error);
+    await upsertUserDoc(userId, newUserData);
+  } catch {
+    // local identity is enough
   }
 }
 
 export async function setDisplayName(name: string) {
   const trimmed = name.trim().slice(0, 24);
   if (!trimmed) return { ok: false as const, error: "Name required" };
-  localStorage.setItem(WZ.playerName, trimmed);
-  const userId = store.user.userId;
-  if (userId) {
-    await updateUserData(userId, { playerName: trimmed });
-    const lobby = store.lobby;
-    if (lobby?.lobbyCode && lobby.playMode === PLAY_MODE.ONLINE) {
+  setStoredPlayerName(trimmed);
+  const userId = store.user.userId || getOrCreatePlayerId();
+  setUser({ userId, playerName: trimmed });
+  const lobby = store.lobby;
+  if (lobby?.lobbyCode && lobby.playMode === PLAY_MODE.ONLINE) {
+    try {
       const players = (lobby.players || []).map((p) =>
         p.userId === userId ? { ...p, name: trimmed } : p
       );
       await updateDoc(doc(db, WZ_TABLES.LOBBIES, lobby.lobbyCode), { players });
+      void updateUserData(userId, { playerName: trimmed });
+    } catch (error) {
+      console.error("setDisplayName lobby update", error);
     }
-  } else {
-    setUser({ playerName: trimmed });
   }
   return { ok: true as const };
 }
@@ -201,12 +179,20 @@ export async function createLobby(
     return { ok: true as const, data: { lobbyCode } };
   } catch (error) {
     console.error("createLobby", error);
-    return { ok: false as const, error: "Failed to create lobby" };
+    return {
+      ok: false as const,
+      error:
+        "Failed to create lobby — deploy whozzit Firestore rules (open, no Auth) on akxh-games",
+    };
   }
 }
 
 export async function joinLobby(lobbyCode: string, userId: string, playerName: string) {
   try {
+    if (shouldSuppressRejoin()) {
+      return { ok: false as const, message: "Left lobby; rejoin from the home screen." };
+    }
+
     const code = String(lobbyCode).toUpperCase();
     const lobbyRef = doc(db, WZ_TABLES.LOBBIES, code);
     const snap = await getDoc(lobbyRef);
@@ -220,7 +206,8 @@ export async function joinLobby(lobbyCode: string, userId: string, playerName: s
       if (!alreadyIn) {
         return { ok: false as const, message: "This game has already started." };
       }
-      setLobby({ ...existing, lobbyFetched: true });
+      setLobby({ ...existing, lobbyCode: code, lobbyFetched: true });
+      setUser({ playerLobbyCode: code });
       return { ok: true as const, data: existing };
     }
 
@@ -232,7 +219,7 @@ export async function joinLobby(lobbyCode: string, userId: string, playerName: s
       }
       const name =
         playerName.trim() ||
-        localStorage.getItem(WZ.playerName) ||
+        getStoredPlayerName() ||
         `Player ${players.length + 1}`;
       players.push({
         userId,
@@ -243,17 +230,27 @@ export async function joinLobby(lobbyCode: string, userId: string, playerName: s
       trackLobbyJoined(modeFromPlayMode(existing.playMode));
     }
 
-    await updateUserData(userId, { playerLobbyCode: code, playerName: playerName.trim() || undefined });
+    await updateUserData(userId, {
+      playerLobbyCode: code,
+      playerName: playerName.trim() || undefined,
+    });
     const refreshed = (await getDoc(lobbyRef)).data() as Lobby;
-    setLobby({ ...refreshed, lobbyFetched: true });
+    setLobby({ ...refreshed, lobbyCode: code, lobbyFetched: true });
     return { ok: true as const, data: refreshed };
   } catch (error) {
     console.error("joinLobby", error);
-    return { ok: false as const, message: "Could not join lobby." };
+    return {
+      ok: false as const,
+      message:
+        "Could not join lobby. Deploy whozzit Firestore rules (no Auth) on akxh-games.",
+    };
   }
 }
 
+/** Clear membership locally first; Firestore unjoin is best-effort. */
 export async function leaveLobby(lobbyCode: string, userId: string) {
+  clearClientLobbyMembership();
+
   try {
     const lobbyRef = doc(db, WZ_TABLES.LOBBIES, lobbyCode);
     await runTransaction(db, async (tx) => {
@@ -261,7 +258,7 @@ export async function leaveLobby(lobbyCode: string, userId: string) {
       if (!snap.exists()) return;
       const lobby = snap.data() as Lobby;
       const players = (lobby.players || []).filter((p) => p.userId !== userId);
-      const patch: Partial<Lobby> = { players };
+      const patch: Record<string, unknown> = { players };
       if (lobby.hostId === userId && players.length) {
         patch.hostId = players[0].userId;
         players[0] = { ...players[0], isHost: true };
@@ -269,11 +266,19 @@ export async function leaveLobby(lobbyCode: string, userId: string) {
       }
       tx.update(lobbyRef, patch);
     });
-    await updateUserData(userId, { playerLobbyCode: null });
-    setLobby(null);
   } catch (error) {
-    console.error("leaveLobby", error);
+    console.error("leaveLobby firestore", error);
   }
+
+  void upsertUserDoc(userId, { playerLobbyCode: null }).catch(() => {});
+}
+
+export function clearClientLobbyMembership() {
+  setUser({ playerLobbyCode: null });
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(WZ.lobbyCode);
+  }
+  setLobby(null);
 }
 
 export function subscribeLobby(lobbyCode: string) {

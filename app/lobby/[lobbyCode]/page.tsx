@@ -13,11 +13,11 @@ import { FALLBACK_WORDS, formatPackLabel } from "@/app/questions";
 import { useLobby, useUser } from "@/hooks";
 import {
   castVote,
+  clearClientLobbyMembership,
   hostNextRound,
   joinLobby,
   leaveLobby,
   lockRoundIfNeeded,
-  patchStoreLobby,
   returnToLobby,
   setEnabledPacks,
   setTimerSeconds,
@@ -46,6 +46,11 @@ import {
   trackRoundFinished,
   trackVoteCast,
 } from "@/utils/analytics";
+import {
+  clearSuppressRejoin,
+  markLeftLobby,
+  shouldSuppressRejoin,
+} from "@/utils/lobbyLeave";
 
 export default function LobbyPage() {
   const params = useParams();
@@ -69,14 +74,21 @@ export default function LobbyPage() {
 
   useEffect(() => {
     if (hydrateLocalIfMatch(lobbyCode)) return;
+    if (shouldSuppressRejoin()) {
+      clearClientLobbyMembership();
+      router.replace("/");
+      return;
+    }
     if (!booted || !userFetched || !userId) return;
     const unsub = subscribeLobby(lobbyCode);
     return () => unsub();
-  }, [lobbyCode, booted, userFetched, userId]);
+  }, [lobbyCode, booted, userFetched, userId, router]);
 
   useEffect(() => {
     if (local || joinedRef.current || !userId || !userFetched) return;
+    if (shouldSuppressRejoin()) return;
     joinedRef.current = true;
+    clearSuppressRejoin();
     const name =
       playerName ||
       (typeof window !== "undefined" ? localStorage.getItem(WZ.playerName) : "") ||
@@ -253,14 +265,16 @@ export default function LobbyPage() {
   };
 
   const onLeave = async () => {
-    if (local) {
+    markLeftLobby();
+    if (local || isLocalHotseatCode(lobbyCode)) {
       clearLocalLobby();
-      patchStoreLobby(null);
-      router.push("/");
+      clearClientLobbyMembership();
+      router.replace("/");
       return;
     }
     if (userId) await leaveLobby(lobbyCode, userId);
-    router.push("/");
+    else clearClientLobbyMembership();
+    router.replace("/");
   };
 
   if (!lobby?.lobbyFetched && !local) {

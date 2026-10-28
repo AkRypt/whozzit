@@ -6,12 +6,17 @@ import { constants, PLAY_MODE, WZ } from "./constants";
 import { useUser } from "@/hooks";
 import {
   createLobby,
+  leaveLobby,
   setDisplayName,
 } from "@/utils/firebase/firebaseHelpers";
 import { createLocalHotseat } from "@/utils/localLobby";
 import { generateLobbyCode } from "@/utils";
 import { trackLobbyCreated } from "@/utils/analytics";
 import NameEditor from "./components/NameEditor";
+import {
+  clearSuppressRejoin,
+  shouldSuppressRejoin,
+} from "@/utils/lobbyLeave";
 
 export default function HomePage() {
   const router = useRouter();
@@ -31,10 +36,19 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!booted || !userFetched) return;
+
+    // After Leave: stay home and scrub leftover membership.
+    if (shouldSuppressRejoin()) {
+      if (playerLobbyCode && userId) {
+        void leaveLobby(playerLobbyCode, userId);
+      }
+      return;
+    }
+
     if (playerLobbyCode) {
       router.replace(`/lobby/${playerLobbyCode}`);
     }
-  }, [booted, userFetched, playerLobbyCode, router]);
+  }, [booted, userFetched, playerLobbyCode, userId, router]);
 
   const ensureName = async () => {
     const trimmed = nameDraft.trim();
@@ -60,20 +74,25 @@ export default function HomePage() {
     setError("");
     try {
       const name = await ensureName();
-      if (!name || !userId) {
-        if (!userId) setError("Firebase Auth isn’t ready — check env keys or use Pass & play.");
+      if (!name) return;
+      const id = userId;
+      if (!id) {
+        setError("Could not create a local player id. Try refreshing.");
         return;
       }
+      clearSuppressRejoin();
       const lobbyCode = generateLobbyCode();
-      const result = await createLobby(lobbyCode, userId, PLAY_MODE.ONLINE);
+      const result = await createLobby(lobbyCode, id, PLAY_MODE.ONLINE);
       if (!result.ok) {
-        setError("Could not create lobby. Check Firebase Anonymous Auth + env.");
+        setError(
+          "Could not create lobby. Deploy whozzit Firestore rules on akxh-games (no Auth required)."
+        );
         return;
       }
       trackLobbyCreated("online");
       router.push(`/lobby/${lobbyCode}`);
     } catch {
-      setError("Online lobby needs a valid Firebase project.");
+      setError("Online lobby needs Firebase project env + open whozzit_* rules.");
     } finally {
       setBusy(false);
     }
@@ -86,6 +105,7 @@ export default function HomePage() {
     try {
       const name = await ensureName();
       if (!name) return;
+      clearSuppressRejoin();
       const lobby = createLocalHotseat(name);
       trackLobbyCreated("pass_and_play");
       router.push(`/lobby/${lobby.lobbyCode}`);
@@ -102,6 +122,7 @@ export default function HomePage() {
     if (trimmed.length !== constants.lobbyCodeLength) return;
     const name = await ensureName();
     if (!name) return;
+    clearSuppressRejoin();
     router.push(`/lobby/${trimmed}`);
   };
 
@@ -191,6 +212,9 @@ export default function HomePage() {
         >
           {busy ? "Creating…" : "Online lobby"}
         </button>
+        <p className="text-center text-xs text-[var(--wz-muted)]">
+          No login — name stays on this device. Pass &amp; play works offline.
+        </p>
       </section>
 
       {error && (

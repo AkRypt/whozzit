@@ -7,6 +7,7 @@ import {
   patchStoreLobby,
   patchStoreUser,
 } from "@/utils/firebase/firebaseHelpers";
+import { getOrCreatePlayerId } from "@/utils/identity";
 
 const STORAGE_KEY = "whozzit_hotseat_lobby";
 
@@ -41,8 +42,9 @@ export function isLocalHotseatCode(code: string): boolean {
 
 export function createLocalHotseat(hostName: string): Lobby {
   const lobbyCode = generateLobbyCode();
+  const hostId = getOrCreatePlayerId();
   const host: Player = {
-    userId: makeLocalPlayerId(hostName || "Host", 0),
+    userId: hostId,
     name: hostName || "Host",
     isHost: true,
   };
@@ -66,7 +68,7 @@ export function createLocalHotseat(hostName: string): Lobby {
   });
   if (typeof window !== "undefined") {
     localStorage.setItem(WZ.playerName, host.name);
-    localStorage.setItem(WZ.userId, host.userId);
+    localStorage.setItem(WZ.lobbyCode, lobbyCode);
   }
   persist(lobby);
   return lobby;
