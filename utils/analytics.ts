@@ -10,6 +10,7 @@ export const ANALYTICS_EVENTS = {
   pageView: "page_view",
   lobbyCreated: "lobby_created",
   lobbyJoined: "lobby_joined",
+  deckSelected: "deck_selected",
   gameStarted: "game_started",
   voteCast: "vote_cast",
   roundFinished: "round_finished",
@@ -109,11 +110,19 @@ export function trackGameStarted(args: {
   mode: AnalyticsMode;
   playerCount: number;
   lobbyCode: string;
+  /** Enabled pack ids, e.g. "spicy,chaotic" (clipped). */
+  packs?: string[];
 }) {
   if (!claimOnce(`game-start:${args.lobbyCode}`)) return;
+  const deck_id = clip((args.packs || []).join(",") || "unknown");
+  track(ANALYTICS_EVENTS.deckSelected, {
+    mode: args.mode,
+    deck_id,
+  });
   track(ANALYTICS_EVENTS.gameStarted, {
     mode: args.mode,
     player_count: Math.max(0, Math.round(args.playerCount)),
+    deck_id,
   });
 }
 

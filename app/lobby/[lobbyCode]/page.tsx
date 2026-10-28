@@ -18,6 +18,7 @@ import {
   joinLobby,
   leaveLobby,
   lockRoundIfNeeded,
+  patchLobbyFields,
   returnToLobby,
   setEnabledPacks,
   setTimerSeconds,
@@ -178,21 +179,47 @@ export default function LobbyPage() {
   const showHotseatPass = local && lobby?.gameState === GAME_STATE.VOTING && !passReveal;
 
   const togglePack = (id: string) => {
-    if (!isHost) return;
+    if (!isHost) {
+      setError("Only the host can change packs.");
+      return;
+    }
     const current = enabledRef.current;
     const next = current.includes(id)
       ? current.filter((x) => x !== id)
       : [...current, id];
     enabledRef.current = next;
-    if (local) localSetPacks(next);
-    else void setEnabledPacks(lobbyCode, next).catch(() => setError("Could not update packs"));
+    if (local) {
+      localSetPacks(next);
+      return;
+    }
+    patchLobbyFields({ enabledPacks: next });
+    void setEnabledPacks(lobbyCode, next).catch(() =>
+      setError("Could not update packs — check Firestore rules on akxh-games.")
+    );
   };
 
   const onTimerChange = (value: number) => {
     if (!isHost) return;
-    if (local) localSetTimer(value);
-    else void setTimerSeconds(lobbyCode, value);
+    if (local) {
+      localSetTimer(value);
+      return;
+    }
+    patchLobbyFields({ timerSeconds: value });
+    void setTimerSeconds(lobbyCode, value).catch(() =>
+      setError("Could not update timer — check Firestore rules on akxh-games.")
+    );
   };
+
+  const startBlockedReason =
+    packsState !== "ready"
+      ? "Loading packs…"
+      : players.length < constants.minPlayers
+        ? `Add ${constants.minPlayers - players.length} more player${
+            constants.minPlayers - players.length === 1 ? "" : "s"
+          } (${players.length}/${constants.minPlayers})`
+        : enabled.length === 0
+          ? "Select at least one pack"
+          : "";
 
   const onStart = async () => {
     if (busy) return;
@@ -209,6 +236,7 @@ export default function LobbyPage() {
             mode: "pass_and_play",
             playerCount: res.playerCount || players.length,
             lobbyCode,
+            packs: chosen,
           });
         }
       } else {
@@ -219,6 +247,7 @@ export default function LobbyPage() {
             mode: "online",
             playerCount: players.length,
             lobbyCode,
+            packs: chosen,
           });
         }
       }
@@ -277,7 +306,7 @@ export default function LobbyPage() {
     router.replace("/");
   };
 
-  if (!lobby?.lobbyFetched && !local) {
+  if (!local && !lobby?.lobbyFetched) {
     return (
       <main className="flex flex-1 items-center justify-center text-[var(--wz-muted)]">
         Connecting to lobby…
@@ -285,10 +314,14 @@ export default function LobbyPage() {
     );
   }
 
-  if (!lobby) {
+  if (!lobby || lobby.missing) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4">
-        <p>Lobby not found.</p>
+      <main className="flex flex-1 flex-col items-center justify-center gap-4 text-center px-4">
+        <p className="text-lg">Lobby not found or couldn’t connect.</p>
+        <p className="text-sm text-[var(--wz-muted)] max-w-sm">
+          If this is an online lobby, publish whozzit Firestore rules on akxh-games (no Auth).
+          Pass &amp; play does not need that.
+        </p>
         <button type="button" className="wz-btn" onClick={() => router.push("/")}>
           Home
         </button>
@@ -434,19 +467,19 @@ export default function LobbyPage() {
           </div>
 
           {isHost ? (
-            <button
-              type="button"
-              className="wz-btn w-full"
-              disabled={
-                busy ||
-                players.length < constants.minPlayers ||
-                enabled.length === 0 ||
-                packsState !== "ready"
-              }
-              onClick={onStart}
-            >
-              {busy ? "Starting…" : "Start"}
-            </button>
+            <div className="space-y-2">
+              <button
+                type="button"
+                className="wz-btn w-full"
+                disabled={busy || !!startBlockedReason}
+                onClick={onStart}
+              >
+                {busy ? "Starting…" : "Start"}
+              </button>
+              {startBlockedReason && (
+                <p className="text-center text-sm text-[var(--wz-muted)]">{startBlockedReason}</p>
+              )}
+            </div>
           ) : (
             <p className="text-center text-sm text-[var(--wz-muted)]">Waiting for host…</p>
           )}

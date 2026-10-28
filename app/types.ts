@@ -31,6 +31,8 @@ export type Lobby = {
   usedQuestions?: string[];
   createdAt?: unknown;
   lobbyFetched?: boolean;
+  /** Snapshot finished but doc missing / permission failed */
+  missing?: boolean;
 };
 
 export type UserData = {

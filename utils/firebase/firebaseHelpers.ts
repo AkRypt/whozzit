@@ -42,9 +42,13 @@ const store: Store = {
   loading: false,
 };
 
+/** Bumps on every store change so useSyncExternalStore snapshots are never stale. */
+let revision = 0;
+
 const listeners = new Set<Listener>();
 
 function emit() {
+  revision += 1;
   listeners.forEach((l) => l());
 }
 
@@ -54,6 +58,14 @@ export function notifyStore() {
 
 export function getStore(): Store {
   return store;
+}
+
+export function getStoreRevision(): number {
+  return revision;
+}
+
+export function getStoreError(): string {
+  return store.error;
 }
 
 export function subscribeStore(listener: Listener) {
@@ -159,15 +171,21 @@ export async function setDisplayName(name: string) {
 export async function createLobby(
   lobbyCode: string,
   hostId: string,
-  playMode: PlayMode = PLAY_MODE.ONLINE
+  playMode: PlayMode = PLAY_MODE.ONLINE,
+  hostName = "Host"
 ) {
   try {
+    const hostPlayer: Player = {
+      userId: hostId,
+      name: hostName.trim() || "Host",
+      isHost: true,
+    };
     const lobby: Lobby = {
       lobbyCode,
       playMode,
       hostId,
       gameState: GAME_STATE.LOBBY,
-      players: [],
+      players: [hostPlayer],
       enabledPacks: null,
       timerSeconds: constants.defaultTimerSeconds,
       round: 0,
@@ -176,6 +194,11 @@ export async function createLobby(
       createdAt: new Date(),
     };
     await setDoc(doc(db, WZ_TABLES.LOBBIES, lobbyCode), lobby);
+    setLobby({ ...lobby, lobbyFetched: true });
+    setUser({ playerLobbyCode: lobbyCode });
+    if (typeof window !== "undefined") {
+      localStorage.setItem(WZ.lobbyCode, lobbyCode);
+    }
     return { ok: true as const, data: { lobbyCode } };
   } catch (error) {
     console.error("createLobby", error);
@@ -185,6 +208,13 @@ export async function createLobby(
         "Failed to create lobby — deploy whozzit Firestore rules (open, no Auth) on akxh-games",
     };
   }
+}
+
+/** Optimistic local lobby patch (online UI before Firestore confirms). */
+export function patchLobbyFields(partial: Partial<Lobby>) {
+  const current = store.lobby;
+  if (!current) return;
+  setLobby({ ...current, ...partial, lobbyFetched: true });
 }
 
 export async function joinLobby(lobbyCode: string, userId: string, playerName: string) {
@@ -287,15 +317,34 @@ export function subscribeLobby(lobbyCode: string) {
     doc(db, WZ_TABLES.LOBBIES, code),
     (snap) => {
       if (!snap.exists()) {
-        setLobby(null);
+        store.error = "";
+        setLobby({
+          lobbyCode: code,
+          playMode: PLAY_MODE.ONLINE,
+          hostId: "",
+          gameState: GAME_STATE.LOBBY,
+          players: [],
+          lobbyFetched: true,
+          missing: true,
+        });
         return;
       }
-      setLobby({ ...(snap.data() as Lobby), lobbyCode: code, lobbyFetched: true });
+      store.error = "";
+      setLobby({ ...(snap.data() as Lobby), lobbyCode: code, lobbyFetched: true, missing: false });
     },
     (error) => {
       console.error("subscribeLobby", error);
-      store.error = "Lost lobby connection";
-      emit();
+      store.error =
+        "Could not connect to lobby. Deploy whozzit Firestore rules on akxh-games (no Auth).";
+      setLobby({
+        lobbyCode: code,
+        playMode: PLAY_MODE.ONLINE,
+        hostId: "",
+        gameState: GAME_STATE.LOBBY,
+        players: [],
+        lobbyFetched: true,
+        missing: true,
+      });
     }
   );
 }

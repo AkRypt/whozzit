@@ -82,7 +82,7 @@ export default function HomePage() {
       }
       clearSuppressRejoin();
       const lobbyCode = generateLobbyCode();
-      const result = await createLobby(lobbyCode, id, PLAY_MODE.ONLINE);
+      const result = await createLobby(lobbyCode, id, PLAY_MODE.ONLINE, name);
       if (!result.ok) {
         setError(
           "Could not create lobby. Deploy whozzit Firestore rules on akxh-games (no Auth required)."
