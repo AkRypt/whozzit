@@ -1,5 +1,6 @@
 rules_version = '2';
-// Shared Firebase project (akxh-games) — merge with Spycy/Ishaare rules in console.
+// Shared Firebase project (akxh-games).
+// Deploy as the full ruleset (merge) — do not replace Spycy/Ishaare rules with whozzit-only.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /whozzit_users/{userId} {
@@ -18,5 +19,27 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if false;
     }
+
+    match /spycy_users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /spycy_lobbies/{lobbyId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+    }
+    match /spycy_words/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /ishaare_users/{uid} { allow read, write: if false; }
+    match /ishaare_decks/{id} { allow read, write: if false; }
+    match /ishaare_words/{id} { allow read, write: if false; }
+
+    match /users/{id} { allow read, write: if false; }
+    match /decks/{id} { allow read, write: if false; }
+    match /words/{id} { allow read, write: if false; }
+    match /lobbies/{id} { allow read, write: if false; }
   }
 }
