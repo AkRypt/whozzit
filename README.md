@@ -19,12 +19,14 @@ Firebase’s “Anonymous Auth” was never a real login — it just minted a th
 
 ## Firestore rules (required for online)
 
-Deploy `firestore.rules` from this repo as the **full** project ruleset (includes Spycy/Ishaare matches). Who zzit collections allow unauthenticated lobby read/write; pack **writes** stay Admin-only.
+Until rules are published, **Pass & play works**; Online create/join shows a permission / deploy error.
 
-Console path: Firebase → Firestore → Rules → paste / publish  
+**Console (easiest):** Firebase → project **akxh-games** → Firestore → **Rules** → paste the full `firestore.rules` from this repo → **Publish**.  
+Step-by-step: see Project doc `docs/whozzit-firebase-rules.md` (or the copy in the AkxH agent store).
+
 Or: `firebase deploy --only firestore:rules --project akxh-games`
 
-Until those rules are live, **Pass & play still works**; Online create/join will fail with a permission error.
+Who zzit collections allow unauthenticated lobby read/write; pack **writes** stay Admin-only. The file also keeps Spycy/Ishaare rules — publish the **whole** file, not whozzit-only.
 
 ## Local
 

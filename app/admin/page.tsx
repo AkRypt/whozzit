@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatPackLabel } from "@/app/questions";
+import QuestionRow from "./QuestionRow";
 
 type Packs = Record<string, string[]>;
 
@@ -46,7 +47,7 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false);
   const [packsLoading, setPacksLoading] = useState(false);
   const focusNewRef = useRef(false);
-  const lastInputRef = useRef<HTMLInputElement | null>(null);
+  const lastInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const categories = useMemo(() => Object.keys(packs).sort(), [packs]);
 
@@ -368,30 +369,25 @@ export default function AdminPage() {
             </span>
           </div>
 
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col gap-3">
             {draftRows.map((row, index) => (
-              <li key={row.id} className="flex items-stretch gap-2">
-                <input
-                  ref={index === draftRows.length - 1 ? lastInputRef : undefined}
-                  className="wz-input py-3 text-[15px] leading-snug"
-                  value={row.text}
-                  onChange={(e) => updateRow(row.id, e.target.value)}
-                  placeholder={`Question ${index + 1}`}
-                  aria-label={`Question ${index + 1}`}
-                />
-                <button
-                  type="button"
-                  className="shrink-0 w-11 rounded-xl border border-[var(--wz-border)] bg-black/25 text-[var(--wz-muted)] text-xl leading-none transition active:scale-95 hover:text-[var(--wz-accent)] hover:border-[var(--wz-accent)]/40"
-                  onClick={() => removeRow(row.id)}
-                  aria-label={`Delete question ${index + 1}`}
-                  title="Delete"
-                >
-                  ×
-                </button>
-              </li>
+              <QuestionRow
+                key={row.id}
+                index={index}
+                value={row.text}
+                onChange={(value) => updateRow(row.id, value)}
+                onDelete={() => removeRow(row.id)}
+                inputRef={
+                  index === draftRows.length - 1
+                    ? (el) => {
+                        lastInputRef.current = el;
+                      }
+                    : undefined
+                }
+              />
             ))}
             {draftRows.length === 0 && (
-              <li className="text-sm text-[var(--wz-muted)] py-2">
+              <li className="text-sm text-[var(--wz-muted)] py-2 list-none">
                 No questions yet — tap + to add one.
               </li>
             )}

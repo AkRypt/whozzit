@@ -23,31 +23,37 @@ if (await page.locator('input[type="password"]').count()) {
   await page.waitForTimeout(1500);
 }
 
-await page.screenshot({ path: resolve(outDir, "whozzit-admin-rows-brave.png"), fullPage: true });
+const longQ =
+  "Most likely to send a risky text after two drinks and then pretend it was autocorrect";
 
-const rowsBefore = await page.locator('ul li input[aria-label^="Question"]').count();
 await page.getByRole("button", { name: "Add question" }).click();
 await page.waitForTimeout(300);
-const rowsAfterAdd = await page.locator('ul li input[aria-label^="Question"]').count();
+const last = page.locator('textarea[aria-label^="Question"]').last();
+await last.fill(longQ);
+await page.waitForTimeout(400);
 
-const last = page.locator('ul li input[aria-label^="Question"]').last();
-await last.fill("Most likely to verify admin row UI");
+const box = await last.boundingBox();
+const scrollH = await last.evaluate((el) => el.scrollHeight);
+const clientH = await last.evaluate((el) => el.clientHeight);
+const value = await last.inputValue();
+
+await page.screenshot({
+  path: resolve(outDir, "whozzit-admin-full-q-brave.png"),
+  fullPage: true,
+});
+
+await page.locator('button[aria-label^="Delete question"]').last().click();
 await page.waitForTimeout(200);
 
-await page.locator('ul li button[aria-label^="Delete question"]').last().click();
-await page.waitForTimeout(300);
-const rowsAfterDelete = await page.locator('ul li input[aria-label^="Question"]').count();
-
-const hasTextarea = (await page.locator("textarea").count()) > 0;
+const hasSingleLineInput = (await page.locator('ul li input[aria-label^="Question"]').count()) > 0;
 const result = {
-  rowsBefore,
-  rowsAfterAdd,
-  rowsAfterDelete,
-  hasTextarea,
-  ok:
-    !hasTextarea &&
-    rowsAfterAdd === rowsBefore + 1 &&
-    rowsAfterDelete === rowsBefore,
+  valueMatches: value === longQ,
+  heightEnough: clientH >= 50 && scrollH <= clientH + 2,
+  boxHeight: box?.height ?? 0,
+  scrollH,
+  clientH,
+  hasSingleLineInput,
+  ok: value === longQ && !hasSingleLineInput && clientH >= 50 && scrollH <= clientH + 4,
 };
 console.log(JSON.stringify(result, null, 2));
 await browser.close();
